@@ -138,41 +138,80 @@ def calc_adler32(data, length):
   return (b << 16) | a
 
 
+
 class StreamReader(object):
+  UINT_FMT = '<I'
+  USHORT_FMT = '<H'
+  INT_FMT = '<i'
+  SHORT_FMT = '<h'
+  LONG_FMT = '<l'
+  ULONG_FMT = '<L'
+  LONGLONG_FMT = '<q'
+  ULONGLONG_FMT = '<Q'
+  UBYTE_FMT = '<B'
+  BYTE_FMT = '<b'
+
   def __init__(self, buf):
     self.buf = buf
     self.read_map = {
-      BYTE: self.read_function(1),
-      UBYTE: self.read_function(1),
+      BYTE: self.read_ubyte,
+      UBYTE: self.read_ubyte,
 
-      SHORT: self.read_function(2),
-      USHORT: self.read_function(2),
+      SHORT: self.read_ushort,
+      USHORT: self.read_ushort,
 
-      INT: self.read_function(4),
-      UINT: self.read_function(4),
+      INT: self.read_uint,
+      UINT: self.read_uint,
 
-      LONG: self.read_function(8),
-      ULONG: self.read_function(8),
+      LONG: self.read_ulong,
+      ULONG: self.read_ulong,
 
       SLEB: self.read_sleb,
       ULEB: self.read_uleb,
       ULEBP1: self.read_ulebp1,
       STRING: self.read_string,
 
-      MAGIC: self.read_function(8),
-      SIGNATURE: self.read_function(20)
+      MAGIC: self.read_magic,
+      SIGNATURE: self.read_signature
     }
-  def read_ubyte(self, index):
-    return self.read_function(1)(index).value & 0xff
+  def read_ubyte(self, index, *args):
+    ret = self.__read(index, 1, *args)
+    ret.value = struct.unpack(self.UBYTE_FMT, ret.value)[0]
+    return ret
+  
+  def read_uint(self, index, *args):
+    ret = self.__read(index, 4, *args)
+    ret.value = struct.unpack(self.UINT_FMT, ret.value)[0]
+    return ret
+
+  def read_ushort(self, index, *args):
+    ret = self.__read(index, 2, *args)
+    ret.value = struct.unpack(self.USHORT_FMT, ret.value)[0]
+    return ret
+
+  def read_ulong(self, index, *args):
+    ret = self.__read(index, 8, *args)
+    ret.value = struct.unpack(self.ULONGLONG_FMT, ret.value)[0]
+    return ret
+
+  def read_magic(self, index, *args):
+    ret = self.__read(index, 8, *args)
+    return ret
+
+
+  def read_signature(self, index, *args):
+    ret = self.__read(index, 20, *args)
+    return ret
+
   def read_string(self, index):
     s = 0
     size = 0
-    ret = []
+    ret = bytearray()
     while True:
-      a = self.read_ubyte(index + size)
+      a = self.read_ubyte(index + size).value
       size += 1
       if a == 0:
-        return DexPrimitive(''.join(ret), size)
+        return DexPrimitive(ret.decode("utf-8"), size)
       if a < 0x80:
         ret.append(a)
       elif (a & 0xe0) == 0xc0:
@@ -208,12 +247,14 @@ class StreamReader(object):
       result |= -(1 << shift)
     return DexPrimitive(result, size)
 
-  def read_uleb(self, index):
+
+  
+  def read_uleb(self, index, *args):
     result = 0
     shift = 0
     size = 0
     while True:
-      b = ord(self.read_ubyte(index + size))
+      b = self.buf[index + size: index + size + 1][0]
       size += 1
       result |= ((b & 0x7f) << shift)
       shift += 7
@@ -227,16 +268,18 @@ class StreamReader(object):
     return ret
 
 
+  def __read(self, index, size, *args):
+    return DexPrimitive(self.buf[index : index + size], size)
 
   def read_function(self, size):
-    def __read(self, index, *args):
+    def __read(_self, index, *args):
       return DexPrimitive(self.buf[index : index + size], size)
     return __read
 
 
   def read(self, index, read_type, *args):
     fcn = self.read_map[read_type]
-    return fcn(self, index, *args)
+    return fcn(index, *args)
     
   def read_encoded_field(self, index):
     pass
@@ -262,7 +305,8 @@ class StreamReader(object):
     pass
   def read_encoded_array(self, index):
     pass
-
+  def read_map_item(self, index):
+    return MapItem(self, index)
 
 
 class DexPrimitive(object):
@@ -286,6 +330,8 @@ class DexItem(object):
 
   def read_property(self):
     for x in self.value_list:
+      #print('read descriptor : {}'.format(x))
+      #print('index : {} read_size : {}'.format(self.base_index, self.read_size))
       readobj = self.root_stream.read(self.base_index + self.read_size, self.descriptor[x])
       self.read_size += readobj.read_size
       self.value_list[x] = readobj.value
@@ -382,6 +428,114 @@ class HeaderItem(DexItem):
     'data_off': UINT
   }
 
+  def __init__(self, root_stream, index):
+    super(HeaderItem, self).__init__(root_stream, index)
+    if self.map_off != 0:
+      self.map_list = MapList(root_stream, self.map_off)
+
+class MapList(DexItem):
+  descriptor = {
+    'size': UINT
+  }
+
+  def __init__(self, root_stream, index):
+    super(MapList, self).__init__(root_stream, index)
+    self.list = {}
+
+    for x in range(self.size):
+      item = root_stream.read_map_item(index + self.read_size)
+      item.parse_remain()
+      self.list[item.type] = item
+      self.read_size += item.read_size
+
+  def __str__(self):
+    base = super(MapList, self).__str__()
+    for x in self.list:
+      base += '{} : {}\n'.format(x, self.list[x])
+    return base
+
+  def get_string(self, index):
+    string_id_items = self.list[TYPE_STRING_ID_ITEM]
+
+
+class MapItem(DexItem):
+  descriptor = {
+    'type': USHORT,
+    'unused': USHORT,
+    'size': UINT,
+    'offset': UINT
+  }
+
+  def parse_remain(self):
+    if self.type == TYPE_HEADER_ITEM:
+      pass
+    if self.type == TYPE_STRING_ID_ITEM:
+      index = self.offset
+      for x in range(self.size):
+        item = StringIdItem(self.root_stream, index)
+        print(item.get_value().value)
+        index += item.read_size
+    elif self.type == TYPE_TYPE_ID_ITEM:
+      pass
+    elif self.type == TYPE_PROTO_ID_ITEM:
+      pass
+    elif self.type == TYPE_FIELD_ID_ITEM:
+      pass
+    elif self.type == TYPE_METHOD_ID_ITEM:
+      pass
+    elif self.type == TYPE_CLASS_DEF_ITEM:
+      pass
+    elif self.type == TYPE_CALL_SITE_ID_ITEM:
+      pass
+    elif self.type == TYPE_METHOD_HANDLE_ITEM:
+      pass
+    elif self.type == TYPE_MAP_LIST:
+      pass
+    elif self.type == TYPE_TYPE_LIST:
+      pass
+    elif self.type == TYPE_ANNOTATION_SET_REF_LIST:
+      pass
+    elif self.type == TYPE_ANNOTATION_SET_ITEM:
+      pass
+    elif self.type == TYPE_CLASS_DATA_ITEM:
+      pass
+    elif self.type == TYPE_CODE_ITEM:
+      pass
+    elif self.type == TYPE_STRING_DATA_ITEM:
+      pass
+    elif self.type == TYPE_DEBUG_INFO_ITEM:
+      pass
+    elif self.type == TYPE_ENCODED_ARRAY_ITEM:
+      pass
+    elif self.type == TYPE_ANNOTATIONS_DIRECTORY_ITEM:
+      pass
+    elif self.type == TYPE_HIDDENAPI_CLASS_DATA_ITEM:
+      pass
+
+
+class StringIdItem(DexItem):
+  descriptor = {
+    'string_data_off': UINT
+  }
+  def __init__(self, root_stream, index):
+    super(StringIdItem, self).__init__(root_stream, index)
+    self.string_value = None
+
+  def get_value(self):
+    if self.string_value is None:
+      
+      v = StringDataItem(self.root_stream, self.string_data_off)
+      self.string_value = v.value
+    return self.string_value
+
+class StringDataItem(DexItem):
+  descriptor = {
+    'utf16_size': ULEB
+  }
+  def __init__(self, root_stream, index):
+    super(StringDataItem, self).__init__(root_stream, index)
+    self.value = root_stream.read_string(index + self.read_size)
+
 
 
 def main():
@@ -392,6 +546,7 @@ def main():
   print(header)
   print(hex(header.read_size))
   print(header.magic)
+  print('map list : {}'.format(header.map_list))
 
 if __name__ == '__main__':
   main()
