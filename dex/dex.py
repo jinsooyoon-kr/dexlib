@@ -664,9 +664,33 @@ class HeaderItem(DexItem):
     self.type_list = []
     for x in range(self.type_ids_size):
       item = TypeIdItem(self.root_stream, index)
-      print("get type index {}".format(item.descriptor_idx))
       self.manager.type_list.append(self.manager.get_string(item.descriptor_idx))
       index += item.read_size
+
+    index = self.proto_ids_off
+    for x in range(self.proto_ids_size):
+      item = ProtoIdItem(self.root_stream, index)
+      self.manager.proto_list.append(item)
+      index += item.read_size
+    index = self.field_ids_off
+    for x in range(self.field_ids_size):
+      item = FieldIdItem(self.root_stream, index)
+      self.manager.field_list.append(item)
+      index += item.read_size
+
+    index = self.method_ids_off
+    for x in range(self.method_ids_size):
+      item = MethodIdItem(self.root_stream, index)
+      self.manager.method_list.append(item)
+      index += item.read_size
+
+    index = self.class_defs_off
+    for x in range(self.class_defs_size):
+      item = ClassDefItem(self.root_stream, index)
+      self.manager.class_def_list.append(item)
+      index += item.read_size
+
+    self.manager.data_off = self.data_off
 
     if self.map_off != 0:
       self.map_list = MapList(root_stream, self.map_off, self.manager)
