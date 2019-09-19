@@ -125,6 +125,16 @@ VISIBILITY_RUNTIME = 0x01
 VISIBILITY_SYSTEM = 0x02
 
 # DEBUG_INFO_ITEM
+DBG_END_SEQUENCE = 0x00
+DBG_ADVANCE_PC = 0x01
+DBG_ADVANCE_LINE = 0x02
+DBG_START_LOCAL = 0x03
+DBG_START_LOCAL_EXTENDED = 0x04
+DBG_END_LOCAL = 0x05
+DBG_RESTART_LOCAL = 0x06
+DBG_SET_PROLOGUE_END = 0x07
+DBG_SET_EPILOGUE_BEGIN = 0x08
+DBG_SET_FILE = 0x09
 NO_INDEX = 0xffffffff
 
 MOD_ADLER = 65521
@@ -338,7 +348,7 @@ class DexItem(object):
 
   def __getattr__(self, name):
     if name not in self.value_list:
-      raise Exception('{} is not exist in {}'.format(name, self))
+      raise Exception('{} is not exist in {}'.format(name, self.__class__.__name__))
 
     return self.value_list[name]
   def __str__(self):
@@ -400,7 +410,216 @@ class AnnotationElement(DexItem):
     'name_idx': ULEB,
     'value': ENCODED_VALUE
   }
+class ProtoIdItem(DexItem):
+  descriptor = {
+    'shorty_idx': UINT,
+    'return_type_idx': UINT,
+    'parameters_off': UINT
+  }
+  def get_parameters(self):
+    if self.parameters_off == 0: return None
+    if self.type_list is None:
+      self.type_list = None
 
+
+class FieldIdItem(DexItem):
+  descriptor = {
+    'class_idx': USHORT,
+    'type_idx': USHORT,
+    'name_idx': UINT
+  }
+
+class MethodIdItem(DexItem):
+  descriptor = {
+    'class_idx': USHORT,
+    'proto_idx': USHORT,
+    'name_idx': UINT
+  }
+class ClassDefItem(DexItem):
+  descriptor = {
+    'class_idx': USHORT,
+    'access_flags': UINT,
+    'superclass_idx': UINT,
+    'interfaces_off': UINT,
+    'source_file_idx': UINT,
+    'annotations_off': UINT,
+    'class_data_off': UINT,
+    'static_values_off': UINT
+  }
+
+
+class ClassDataItem(DexItem):
+  descriptor = {
+    'static_fields_size': ULEB,
+    'instance_fields_size': ULEB,
+    'direct_methods_size': ULEB,
+    'virtual_methods_size': ULEB
+  }
+  def parse_remain(self):
+    pass
+
+class EncodedField(DexItem):
+  descriptor = {
+    'field_idx_diff': ULEB,
+    'access_flags': ULEB
+  }
+
+class EncodedMethod(DexItem):
+  descriptor = {
+    'method_idx_dif': ULEB,
+    'access_flags': ULEB,
+    'code_off': ULEB
+  }
+
+class TypeList(DexItem):
+  descriptor = {
+    'size': UINT
+  }
+  def parse_remain(self):
+    pass
+
+
+class TypeItem(DexItem):
+  descriptor = {
+    'type_idx': USHORT
+  }
+
+class CodeItem(DexItem):
+  descriptor = {
+    'registers_size': USHORT,
+    'ins_size': USHORT,
+    'outs_size': USHORT,
+    'tries_size': USHORT,
+    'debug_info_off': UINT,
+    'insns_size': UINT
+  }
+
+  def parse_remain(self):
+    pass
+
+class TryItem(DexItem):
+  descriptor = {
+    'start_addr': UINT,
+    'insn_count': USHORT,
+    'handler_off': USHORT
+  }
+
+
+class EncodedCatchHandlerList(DexItem):
+  descriptor = {
+    'size': ULEB
+  }
+
+  def parse_remain(self):
+    pass
+
+
+class EncodedCatchHandler(DexItem):
+  descriptor = {
+    'size': SLEB
+  }
+
+  def parse_remain(self):
+    pass
+
+class EncodedTypeAddrpair(DexItem):
+  descriptor = {
+    'type_idx': ULEB,
+    'addr': ULEB
+  }
+
+
+class DebugInfoItem(DexItem):
+  descriptor = {
+    'line_start': ULEB,
+    'parameters_size': ULEB
+  }
+
+  def parse_remain(self):
+    pass
+
+
+class AnnotationsDirectoryItem(DexItem):
+  descriptor = {
+    'class_annotations_off': UINT,
+    'fields_size': UINT,
+    'annotated_methods_size': UINT,
+    'annotated_parameters_size': UINT
+  }
+
+  def parse_remain(self):
+    pass
+
+class FieldAnnotation(DexItem):
+  descriptor = {
+    'field_idx': UINT,
+    'annotations_off': UINT
+  }
+
+class MethodAnnotation(DexItem):
+  descriptor = {
+    'method_idx': UINT,
+    'annotations_off': UINT
+  }
+
+
+class ParameterAnnotation(DexItem):
+  descriptor = {
+    'method_idx': UINT,
+    'annotations_off': UINT
+  }
+
+class AnnotationSetRefList(DexItem):
+  descriptor = {
+    'size': UINT
+  }
+  def parse_remain(self):
+    pass
+
+
+class AnnotationSetRefItem(DexItem):
+  descriptor = {
+    'annotations_off': UINT
+  }
+
+class AnnotationSetItem(DexItem):
+  descriptor = {
+    'size': UINT
+  }
+
+
+class AnnotationOffItem(DexItem):
+  descriptor = {
+    'annotation_off': UINT
+  }
+
+class AnnotationItem(DexItem):
+  descriptor = {
+    'visibility': UBYTE
+  }
+  def parse_remain(self):
+    pass
+
+
+class EncodedArrayItem(DexItem):
+
+  def parse_remain(self):
+    pass
+
+
+class DexManager(object):
+  def __init__(self):
+    self.string_list = []
+    self.type_list = []
+    self.proto_list = []
+    self.field_list = []
+    self.method_list = []
+    self.class_def_list = []
+    
+  def get_string(self, index):
+    return self.string_list[index]
+  def get_type(self, index):
+    return self.type_list[index]
 
 class HeaderItem(DexItem):
   descriptor = {
@@ -413,6 +632,7 @@ class HeaderItem(DexItem):
     'link_size': UINT,
     'link_off': UINT,
     'map_off': UINT,
+    'string_ids_size': UINT,
     'string_ids_off': UINT,
     'type_ids_size': UINT,
     'type_ids_off': UINT,
@@ -430,20 +650,42 @@ class HeaderItem(DexItem):
 
   def __init__(self, root_stream, index):
     super(HeaderItem, self).__init__(root_stream, index)
+    self.manager = DexManager()
+
+
+    index = self.string_ids_off
+    self.manager.string_list = []
+    for x in range(self.string_ids_size):
+      item = StringIdItem(self.root_stream, index)
+      self.manager.string_list.append(item.get_value().value)
+      index += item.read_size
+
+    index = self.type_ids_off
+    self.type_list = []
+    for x in range(self.type_ids_size):
+      item = TypeIdItem(self.root_stream, index)
+      print("get type index {}".format(item.descriptor_idx))
+      self.manager.type_list.append(self.manager.get_string(item.descriptor_idx))
+      index += item.read_size
+
     if self.map_off != 0:
-      self.map_list = MapList(root_stream, self.map_off)
+      self.map_list = MapList(root_stream, self.map_off, self.manager)
+
+
 
 class MapList(DexItem):
   descriptor = {
     'size': UINT
   }
 
-  def __init__(self, root_stream, index):
+  def __init__(self, root_stream, index, manager):
     super(MapList, self).__init__(root_stream, index)
     self.list = {}
+    self.manager = manager
 
     for x in range(self.size):
       item = root_stream.read_map_item(index + self.read_size)
+      item.set_manager(self.manager)
       item.parse_remain()
       self.list[item.type] = item
       self.read_size += item.read_size
@@ -457,6 +699,10 @@ class MapList(DexItem):
   def get_string(self, index):
     string_id_items = self.list[TYPE_STRING_ID_ITEM]
 
+class TypeIdItem(DexItem):
+  descriptor = {
+    'descriptor_idx': UINT
+  }
 
 class MapItem(DexItem):
   descriptor = {
@@ -465,18 +711,27 @@ class MapItem(DexItem):
     'size': UINT,
     'offset': UINT
   }
+  def __init__(self, root_stream, index):
+    super(MapItem, self).__init__(root_stream, index)
+    self.manager = None
 
+
+  def set_manager(self, manager):
+    self.manager = manager
   def parse_remain(self):
     if self.type == TYPE_HEADER_ITEM:
       pass
     if self.type == TYPE_STRING_ID_ITEM:
-      index = self.offset
-      for x in range(self.size):
-        item = StringIdItem(self.root_stream, index)
-        print(item.get_value().value)
-        index += item.read_size
-    elif self.type == TYPE_TYPE_ID_ITEM:
       pass
+    elif self.type == TYPE_TYPE_ID_ITEM:
+      index = self.offset
+      self.type_list = []
+      for x in range(self.size):
+        item = TypeIdItem(self.root_stream, index)
+        print("get type index {}".format(item.descriptor_idx))
+        self.type_list.append(self.manager.get_string(item.descriptor_idx))
+        index += item.read_size
+      print(self.type_list)
     elif self.type == TYPE_PROTO_ID_ITEM:
       pass
     elif self.type == TYPE_FIELD_ID_ITEM:
