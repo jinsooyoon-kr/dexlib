@@ -161,8 +161,9 @@ class StreamReader(object):
   UBYTE_FMT = '<B'
   BYTE_FMT = '<b'
 
-  def __init__(self, buf):
+  def __init__(self, buf, manager):
     self.buf = buf
+    self.manager = manager
     self.read_map = {
       BYTE: self.read_ubyte,
       UBYTE: self.read_ubyte,
@@ -316,7 +317,7 @@ class StreamReader(object):
   def read_encoded_array(self, index):
     pass
   def read_map_item(self, index):
-    return MapItem(self, index)
+    return MapItem(self.manager, self, index)
 
 
 class DexPrimitive(object):
@@ -328,7 +329,8 @@ class DexPrimitive(object):
 class DexItem(object):
   descriptor = None
 
-  def __init__(self, root_stream, index):
+  def __init__(self, manager, root_stream, index):
+    self.manager = manager
     self.root_stream = root_stream
     self.base_index = index
     self.read_size = 0
@@ -337,6 +339,10 @@ class DexItem(object):
     for name in self.descriptor:
       self.value_list[name] = None
     self.read_property()
+    self.parse_remain()
+
+  def parse_remain(self):
+    pass
 
   def read_property(self):
     for x in self.value_list:
@@ -382,11 +388,12 @@ class EncodedArray(DexItem):
   descriptor = {
     'size': ULEB
   }
-  def __init__(self, root_stream, index):
-    super(DexItem, self).__init__(self, root_stream, index)
+
+
+  def parse_remain(self):
     self.values = []
     for x in self.size:
-      item = root_stream.read_encoded_value(index + self.read_size)
+      item = self.root_stream.read_encoded_value(self.base_index + self.read_size)
       self.values.append(item)
       self.read_size += item.size
 
@@ -396,11 +403,10 @@ class EncodedAnnotation(DexItem):
     'size': ULEB
   }
 
-  def __init__(self, root_stream, index):
-    super(DexItem, self).__init__(self, root_stream, index)
+  def parse_remain(self):
     self.elements = []
     for x in self.size:
-      item = root_stream.read_annotation_element(index + self.read_size)
+      item = self.root_stream.read_annotation_element(self.base_index + self.read_size)
       self.elements.append(item)
       self.read_size += item.size
 
@@ -456,7 +462,29 @@ class ClassDataItem(DexItem):
     'virtual_methods_size': ULEB
   }
   def parse_remain(self):
-    pass
+    self.static_fields = []
+    self.instance_fields = []
+    self.direct_methods = []
+    self.virtual_methods = []
+    for x in range(self.static_fields_size):
+      item = EncodedField(self.manager, self.root_stream, self.base_index + self.read_size)
+      self.static_fields.append(item)
+      self.read_size += item.read_size
+
+    for x in range(self.instance_fields_size):
+      item = EncodedField(self.manager, self.root_stream, self.base_index + self.read_size)
+      self.instance_fields.append(item)
+      self.read_size += item.read_size
+
+    for x in range(self.direct_methods_size):
+      item = EncodedMethod(self.manager, self.root_stream, self.base_index + self.read_size)
+      self.direct_methods.append(item)
+      self.read_size += item.read_size
+
+    for x in range(self.virtual_methods_size):
+      item = EncodedMethod(self.manager, self.root_stream, self.base_index + self.read_size)
+      self.virtual_methods.append(item)
+      self.read_size += item.read_size
 
 class EncodedField(DexItem):
   descriptor = {
@@ -476,7 +504,11 @@ class TypeList(DexItem):
     'size': UINT
   }
   def parse_remain(self):
-    pass
+    self.list = []
+    for x in range(self.size):
+      item = TypeItem(self.manager, self.root_stream, self.base_index + self.read_size)
+      self.list.append(item)
+      self.read_size += item.read_size
 
 
 class TypeItem(DexItem):
@@ -495,7 +527,25 @@ class CodeItem(DexItem):
   }
 
   def parse_remain(self):
-    pass
+    self.insns = []
+    self.padding = 0
+    self.tries = []
+    self.handlers = None
+
+    for x in range(self.insns_size):
+      item = self.root_stream.read_ushort(self.base_index + self.read_size)
+      self.insns.append(item.value)
+      self.read_size += item.read_size
+    if self.tries_size != 0 and self.insns_size % 2 == 1:
+      self.padding = 0
+      self.read_size += 2
+    for x in range(self.tries_size):
+      item = TryItem(self.manager, self.root_stream, self.base_index + self.read_size)
+      self.tries.append(item)
+      self.read_size += item.read_size
+    if self.tries_size:
+      self.handlers = EncodedCatchHandlerList(self.manager, self.root_stream, self.base_index + self.read_size)
+      self.read_size += self.handlers.read_size
 
 class TryItem(DexItem):
   descriptor = {
@@ -511,7 +561,11 @@ class EncodedCatchHandlerList(DexItem):
   }
 
   def parse_remain(self):
-    pass
+    self.list = []
+    for x in range(self.size):
+      item = EncodedCatchHandler(self.manager, self.root_stream, self.base_index + self.read_size)
+      self.list.append(item)
+      self.read_size += item.read_size
 
 
 class EncodedCatchHandler(DexItem):
@@ -520,7 +574,16 @@ class EncodedCatchHandler(DexItem):
   }
 
   def parse_remain(self):
-    pass
+    self.handlers = []
+    self.catch_all_addr = 0
+    for x in range(abs(self.size)):
+      item = EncodedTypeAddrpair(self.manager, self.root_stream, self.base_index + self.read_size)
+      self.handlers.append(item)
+      self.read_size += item.read_size
+    if self.size < 0:
+      item = self.root_stream.read_uleb(self.base_index + self.read_size)
+      self.catch_all_addr = item.value
+      self.read_size += item.read_size
 
 class EncodedTypeAddrpair(DexItem):
   descriptor = {
@@ -536,7 +599,11 @@ class DebugInfoItem(DexItem):
   }
 
   def parse_remain(self):
-    pass
+    self.parameter_names = []
+    for x in self.parameters_size:
+      item = self.root_stream.read_ulebp1(self.base_index + self.read_size)
+      self.parameter_names.append(item.value)
+      self.read_size += item.read_size
 
 
 class AnnotationsDirectoryItem(DexItem):
@@ -548,7 +615,21 @@ class AnnotationsDirectoryItem(DexItem):
   }
 
   def parse_remain(self):
-    pass
+    self.field_annotations = []
+    self.method_annotations = []
+    self.parameter_annotations = []
+    for x in range(self.fields_size):
+      item = FieldAnnotation(self.manager, self.root_stream, self.base_index + self.read_size)
+      self.field_annotations.append(item)
+      self.read_size += item.read_size
+    for x in range(self.annotated_methods_size):
+      item = MethodAnnotation(self.manager, self.root_stream, self.base_index + self.read_size)
+      self.method_annotations.append(item)
+      self.read_size += item.read_size
+    for x in range(self.annotated_parameters_size):
+      item = ParameterAnnotation(self.manager, self.root_stream, self.base_index + self.read_size)
+      self.parameter_annotations.append(item)
+      self.read_size += item.read_size
 
 class FieldAnnotation(DexItem):
   descriptor = {
@@ -574,7 +655,11 @@ class AnnotationSetRefList(DexItem):
     'size': UINT
   }
   def parse_remain(self):
-    pass
+    self.list = []
+    for x in range(self.size):
+      item = AnnotationSetRefItem(self.manager, self.root_stream, self.base_index + self.read_size)
+      self.list.append(item)
+      self.read_size += item.read_size
 
 
 class AnnotationSetRefItem(DexItem):
@@ -586,6 +671,13 @@ class AnnotationSetItem(DexItem):
   descriptor = {
     'size': UINT
   }
+  def parse_remain(self):
+    self.entries = []
+    for x in range(self.size):
+      item = AnnotationOffItem(self.manager, self.root_stream, self.base_index + self.read_size)
+      self.entries.append(item)
+      self.read_size += item.read_size
+
 
 
 class AnnotationOffItem(DexItem):
@@ -598,14 +690,22 @@ class AnnotationItem(DexItem):
     'visibility': UBYTE
   }
   def parse_remain(self):
-    pass
+    self.annotation = EncodedAnnotation(self.manager, self.root_stream, self.base_index + self.read_size)
+    self.read_size += self.annotation.read_size
 
 
 class EncodedArrayItem(DexItem):
 
   def parse_remain(self):
-    pass
+    self.value = EncodedArray(self.manager, self.root_stream, self.base_index + self.read_size)
 
+class HiddenapiClassDataItem(DexItem):
+  descriptor = {
+    'size': UINT
+  }
+  def parse_remain(self):
+    self.offsets = []
+    self.flags = []
 
 class DexManager(object):
   def __init__(self):
@@ -648,52 +748,52 @@ class HeaderItem(DexItem):
     'data_off': UINT
   }
 
-  def __init__(self, root_stream, index):
-    super(HeaderItem, self).__init__(root_stream, index)
-    self.manager = DexManager()
+  def __init__(self, manager, root_stream, index):
+    super(HeaderItem, self).__init__(manager, root_stream, index)
 
 
     index = self.string_ids_off
     self.manager.string_list = []
     for x in range(self.string_ids_size):
-      item = StringIdItem(self.root_stream, index)
+      item = StringIdItem(self.manager, self.root_stream, index)
       self.manager.string_list.append(item.get_value().value)
       index += item.read_size
 
     index = self.type_ids_off
     self.type_list = []
     for x in range(self.type_ids_size):
-      item = TypeIdItem(self.root_stream, index)
+      item = TypeIdItem(self.manager, self.root_stream, index)
       self.manager.type_list.append(self.manager.get_string(item.descriptor_idx))
       index += item.read_size
 
     index = self.proto_ids_off
     for x in range(self.proto_ids_size):
-      item = ProtoIdItem(self.root_stream, index)
+      item = ProtoIdItem(self.manager, self.root_stream, index)
       self.manager.proto_list.append(item)
       index += item.read_size
     index = self.field_ids_off
     for x in range(self.field_ids_size):
-      item = FieldIdItem(self.root_stream, index)
+      item = FieldIdItem(self.manager, self.root_stream, index)
       self.manager.field_list.append(item)
       index += item.read_size
 
     index = self.method_ids_off
     for x in range(self.method_ids_size):
-      item = MethodIdItem(self.root_stream, index)
+      item = MethodIdItem(self.manager, self.root_stream, index)
       self.manager.method_list.append(item)
       index += item.read_size
 
     index = self.class_defs_off
     for x in range(self.class_defs_size):
-      item = ClassDefItem(self.root_stream, index)
+      item = ClassDefItem(self.manager, self.root_stream, index)
       self.manager.class_def_list.append(item)
       index += item.read_size
 
     self.manager.data_off = self.data_off
 
     if self.map_off != 0:
-      self.map_list = MapList(root_stream, self.map_off, self.manager)
+      self.map_list = MapList(self.manager, root_stream, self.map_off)
+
 
 
 
@@ -702,8 +802,8 @@ class MapList(DexItem):
     'size': UINT
   }
 
-  def __init__(self, root_stream, index, manager):
-    super(MapList, self).__init__(root_stream, index)
+  def __init__(self, manager, root_stream, index):
+    super(MapList, self).__init__(manager, root_stream, index)
     self.list = {}
     self.manager = manager
 
@@ -735,10 +835,9 @@ class MapItem(DexItem):
     'size': UINT,
     'offset': UINT
   }
-  def __init__(self, root_stream, index):
-    super(MapItem, self).__init__(root_stream, index)
+  def __init__(self, manager, root_stream, index):
+    super(MapItem, self).__init__(manager, root_stream, index)
     self.manager = None
-
 
   def set_manager(self, manager):
     self.manager = manager
@@ -751,7 +850,7 @@ class MapItem(DexItem):
       index = self.offset
       self.type_list = []
       for x in range(self.size):
-        item = TypeIdItem(self.root_stream, index)
+        item = TypeIdItem(self.manager, self.root_stream, index)
         print("get type index {}".format(item.descriptor_idx))
         self.type_list.append(self.manager.get_string(item.descriptor_idx))
         index += item.read_size
@@ -796,14 +895,14 @@ class StringIdItem(DexItem):
   descriptor = {
     'string_data_off': UINT
   }
-  def __init__(self, root_stream, index):
-    super(StringIdItem, self).__init__(root_stream, index)
+  def __init__(self, manager, root_stream, index):
+    super(StringIdItem, self).__init__(manager, root_stream, index)
     self.string_value = None
 
   def get_value(self):
     if self.string_value is None:
       
-      v = StringDataItem(self.root_stream, self.string_data_off)
+      v = StringDataItem(self.manager, self.root_stream, self.string_data_off)
       self.string_value = v.value
     return self.string_value
 
@@ -811,8 +910,8 @@ class StringDataItem(DexItem):
   descriptor = {
     'utf16_size': ULEB
   }
-  def __init__(self, root_stream, index):
-    super(StringDataItem, self).__init__(root_stream, index)
+  def __init__(self, manager, root_stream, index):
+    super(StringDataItem, self).__init__(manager, root_stream, index)
     self.value = root_stream.read_string(index + self.read_size)
 
 
@@ -820,8 +919,9 @@ class StringDataItem(DexItem):
 def main():
   with open('classes.dex', 'rb') as f:
     x = f.read()
-  stream = StreamReader(x)
-  header = HeaderItem(stream, 0)
+  manager = DexManager()
+  stream = StreamReader(x, manager)
+  header = HeaderItem(manager, stream, 0)
   print(header)
   print(hex(header.read_size))
   print(header.magic)
