@@ -1,0 +1,159 @@
+# Class Structure
+
+파싱
+DexItem(baseClass)
+ - 각종 파싱을 반자동으로 해주는 class, 모든 아이템은 해당 아이템을 상속받아야 함
+
+ parse_remain()
+   * init 시 파싱이 되지 않은 아이템 혹은 추가 처리가 필요한 아이템들을 파싱하는 용도
+   * init을 오버라이드하지 않는 이유는 파이썬2 호환 시 오버라이딩 문법이 구조적으로 깔끔하지 못하기 때문
+
+DexManager
+ - string, types 등의 아이템을 가지고 있는 class
+
+DexStream
+ - 스트림을 관리하는 class
+ - int, short, byte, long 등의 자료형을 읽을 수 있음
+ - bytearray <-> primitive type 간의 변환 지원
+
+
+클래스
+Dex
+ - dex 전체를 관리하는 class
+ * get_class(class_name) - 해당 클래스네임을 가지고있는 DexClass 인스턴스 리턴
+ * init(dex_item), init(smali_item) - dex_item / smali_item 등의 인풋을 받아서 클래스 맵 생성 및 기타 초기화 작업, 현재는 dex_item만 지원
+
+
+DexClass
+ - dex 내부에 있는 클래스를 표현하는 class
+
+  * fields - DexField 리스트
+  * methods - DexMethod 리스트
+  * annotations - DexAnnotation 리스트
+  * superclass - DexClass 리턴, 없을경우 None
+  * interfaces - DexClass 리스트
+
+  * is_interface() - 인터페이스인지 체크
+  * is_static() - 스태틱인지 체크
+  * access_flags - 액세스플래그
+
+
+Dexmethod
+ - dex 내부에 있는 메소드를 표현하는 class
+
+  * return_type - 리턴타입(스트링)
+  * params - 파라미터 리스트
+  * annotations - 어노테이션
+  * get_editor() - 코드 수정을 지원하는 DexEditor 인스턴스 리턴, is_abstract()가 True일 경우 익셉션
+  * is_abstract() - 코드 본체가 있는지 체크
+  * is_static() - 스태틱인지 체크
+  * access_flags - 액세스플래그
+
+DexFields
+ - dex 내부에 있는 필드를 표현하는 class
+
+  * type - 타입
+  * is_static() - 스태틱인지 체크
+  * access_flags - 액세스플래그
+  * value - 필드 값, 타입이 primitive type이 아닐 경우 DexClass 인스턴스, primitive type일 경우 파이썬의 primitive type과 매칭됨, 예외로 String 클래스의 경우 편의를 위해서 파이썬 스트링과 매칭
+  
+  타입 표
+
+  bool - python bool
+  byte, short, character, int, long - python int
+  float, double - python float/double
+  Ljava/lang/String; - python string
+
+
+# 바이트코드 수정
+
+DexEditor
+  - 코드 에디트를 도와주는 class
+
+  * get_codes() - 코드 리스트 이터레이터 리턴, 각 opcode 수정작업 시 영향을 받음
+  * get_current_offset() - 현재 오프셋 리턴
+  * insert_opcode(opcode, offset) - opcode를 offset 위치에 삽입, 리턴은 True/False
+  * del_opcode(offset) - offset 위치에 opcode 삭제, 리턴은 True/False
+  * get_opcode(offset) - offset 위치의 opcode 리턴, 리턴은 opcode
+  * push_opcode(opcode) - 마지막 위치에 opcode 삽입, 리턴은 True/False
+  * get_code_length() - 현재 코드 길이 리턴
+  * update() - 변경된 바이트코드들을 코드에 반영, branch 옵코드의 offset, try_item, method/field/string 인덱스등을 다시 계산하는 용도, try_item의 경우 고려 필요함
+
+사용 예시
+
+```
+for opcode in editor.get_codes():
+  if opcode.opcode == OPCODE.GOTO:
+    branch = opcode.get_branch()
+    branch_start_offset = branch.get_offset()
+    branch_end_offset = editor.get_code_length()
+    for i in range(branch_start_offset, branch_end_offset):
+      push_opcode(editor.get_opcode(i))
+    label = editor.get_opcode(branch_end_offset + 1).make_label()
+    branch.set_label(label)
+
+# while문 등을 분석하기 어렵게 변경, push_opcode() 호출 시 각 branch들은 editor.update() 호출 시 label에 의해서 다시 계산됨
+# try_item 등이 고려가 되어있지 않아 실제로 작동하지는 않음
+
+for opcode in editor.get_codes():
+  if opcode.opcode == OPCODE.CONST_STRING:
+    target_str = opcode.get_string()
+    encrypted_bytes = encrypt(target_str)
+    register = opcode.get_register()
+    aput = AputByte(register, encrypted_bytes)
+    invoke = InvokeStatic(0, manager.get_class('Lsample/decrypt/decrypt').get_method('Decrypt'))
+    ret = Return(register)
+    current_offset = editor.get_current_offset()
+    editor.del_opcode(current_offset)
+    editor.insert_opcode(aput, current_offset)
+    editor.insert_opcode(invoke, current_offset + 1)
+    editor.insert_opcode(ret, current_offset + 2)
+
+# String a = "hello world";를
+# String a = sample.decrypt.decrypt.Decrypt(new byte[]{0x12, 0x34, 0x56, 0x78});
+# 와 같이 변경해 스트링 검색등을 하기 어렵게 만듬
+
+```
+
+
+DexLabel
+ - offset 계산을 자동으로 해주기 위한 class
+ - goto, if-test, if-testz 등의 branch offset을 사용하는 옵코드들은 branch offset 대신 DexLabel()으로 타겟 옵코드를 지정
+
+ * get_target() - 타겟 opcode 리턴
+ * get_refs() - 해당 label을 참조하는 opcode 리스트 리턴
+
+
+DexTryItem
+ - tryitem 오프셋 계산을 자동으로 해주기 위한 class
+
+ * get_start_opcode() - 시작 opcode 리턴
+ * get_end_opcode() - 끝 opcode 리턴
+ * get_handlers() - DexHandler 리스트 리턴
+
+DexHandler
+ - try~catch의 catch 핸들러 class
+ * get_exception_types() - 처리하는 exception type 리턴, catch_all_handler일 경우 None
+ * is_catch_all() - catch_all_handler 여부 리턴
+ * get_addr() - 익셉션 발생 시 jmp할 옵코드 리턴
+
+
+# 저장
+
+DexWriter
+ - 저장을 위한 class
+ * init(dex) - Dex 클래스를 이용해 초기화
+ * set_multidex_policy(policy) - multidexpolicy 지정
+ * set_save_strategy(strategy) - savestrategy 지정
+ * save_as(name) - 출력
+MultiDexPolicy
+ - multidex 저장시 네이밍 규칙, 저장 규칙등을 지정
+ * get_multidex_name(index) - 해당 인덱스에 대한 네이밍 규칙 지정, 기본은 classes.dex, classes2.dex ... classesN.dex
+ 인덱스는 0으로 시작함
+ * get_index(dex_class) - DexClass에 대한 인덱스 리턴
+
+
+
+SaveStrategy
+ - 출력 결과물 타입 지정, smali/dex 등을 지정할 수 있으나 현재 dex만 지원 예정
+ * save_as(name) - dex를 실제로 출력

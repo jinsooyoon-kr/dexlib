@@ -1,5 +1,6 @@
 from zlib import adler32
 import struct
+import inspect
 """
 parse dex
 
@@ -357,31 +358,41 @@ class DexItem(object):
       raise Exception('{} is not exist in {}'.format(name, self.__class__.__name__))
 
     return self.value_list[name]
+  def __get_members(self):
+    except_members = [
+      'manager', 'root_stream', 'descriptor', 'value_list'
+    ]
+    return [i for i in dir(self) if i[:1] != '_' and i not in except_members and not inspect.ismethod(getattr(self, i))]
   def __str__(self):
     ret = ''
     for x in self.value_list:
       ret += '{} : {}\n'.format(x, self.value_list[x])
+    for x in self.__get_members():
+      ret += ' {} : {}\n'.format(x, getattr(self, x))
+
     return ret
 class EncodedValue(DexItem):
-  def __init__(self, root_stream, index):
-    self.read_size = 0
-    value_type = root_stream.read_ubyte(index)
-    self.read_size += value_type.size
-    self.type = value_type.value & 0x1f
-    self.value_size = ((value_type.value >> 5) & 0x7) + 1
+  descriptor = {
+    'value_type': UBYTE
+  }
+  def parse_remain(self):
+    self.type = self.value_type & 0x1f
+    self.value_size = ((self.value_type >> 5) & 0x7) + 1
     if self.type == ENCODED_VALUE_ARRAY:
-      self.value = root_stream.read_encoded_array(index + self.read_size)
+      self.value = EncodedArray(self.manager, self.root_stream, self.base_index + self.read_size)
     elif self.type == ENCODED_VALUE_ANNOTATION:
-      self.value = root_stream.read_encoded_annotation(index + self.read_size)
+      self.value = EncodedAnnotation(self.manager, self.root_stream, self.base_index + self.read_size)
     elif self.type == ENCODED_VALUE_BOOLEAN:
-      self.value = ((value_type.value >> 5) == 1)
+      self.value = ((self.value_type >> 5) == 1)
     elif self.type == ENCODED_VALUE_NULL:
       self.value = None
     else: # later
       self.value = []
       for i in range(self.value_size):
-        self.value.append(root_stream.read_ubyte(index + self.read_size).value)
+        self.value.append(self.root_stream.read_ubyte(self.base_index + self.read_size).value)
         self.read_size += 1
+
+
 
 
 class EncodedArray(DexItem):
@@ -392,10 +403,10 @@ class EncodedArray(DexItem):
 
   def parse_remain(self):
     self.values = []
-    for x in self.size:
-      item = self.root_stream.read_encoded_value(self.base_index + self.read_size)
+    for x in range(self.size):
+      item = EncodedValue(self.manager, self.root_stream, self.base_index + self.read_size)
       self.values.append(item)
-      self.read_size += item.size
+      self.read_size += item.read_size
 
 class EncodedAnnotation(DexItem):
   descriptor = {
@@ -452,6 +463,14 @@ class ClassDefItem(DexItem):
     'class_data_off': UINT,
     'static_values_off': UINT
   }
+  def parse_remain(self):
+    self.data = ClassDataItem(self.manager, self.root_stream, self.class_data_off)
+    self.annotations = None
+    if self.annotations_off:
+      self.annotations = AnnotationsDirectoryItem(self.manager, self.root_stream, self.annotations_off)
+    self.static_values = None
+    if self.static_values_off:
+      self.static_values = EncodedArrayItem(self.manager, self.root_stream, self.static_values_off)
 
 
 class ClassDataItem(DexItem):
@@ -695,7 +714,9 @@ class AnnotationItem(DexItem):
 
 
 class EncodedArrayItem(DexItem):
+  descriptor = {
 
+  }
   def parse_remain(self):
     self.value = EncodedArray(self.manager, self.root_stream, self.base_index + self.read_size)
 
@@ -928,6 +949,6 @@ def main():
   print('map list : {}'.format(header.map_list))
 
   for x in manager.class_def_list:
-    print(x)
+    print(x.data)
 if __name__ == '__main__':
   main()
