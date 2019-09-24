@@ -443,7 +443,7 @@ class MethodIdItem(DexItem):
   }
 class ClassDefItem(DexItem):
   descriptor = {
-    'class_idx': USHORT,
+    'class_idx': UINT,
     'access_flags': UINT,
     'superclass_idx': UINT,
     'interfaces_off': UINT,
@@ -927,5 +927,7 @@ def main():
   print(header.magic)
   print('map list : {}'.format(header.map_list))
 
+  for x in manager.class_def_list:
+    print(x)
 if __name__ == '__main__':
   main()
